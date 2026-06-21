@@ -770,3 +770,266 @@ Body text.
     # Verify rest content preserved
     assert "# Content" in rest
     assert "Body text." in rest
+
+
+# ===========================================================================
+# FIELD ORDERING: New tests for frontmatter field order stabilization
+# ===========================================================================
+
+def test_field_order_core_fields_reordered():
+    """Core fields (title, created, updated, tags, aliases) must appear
+    in the fixed order, regardless of their original order in the document."""
+    content = """---
+aliases: [alias1, alias2]
+tags:
+  - python
+  - testing
+updated: 2025-01-15
+created: 2024-06-01
+title: Core Order Test
+---
+# Content
+Body text.
+"""
+    fields, rest = normalizer.parse_frontmatter(content)
+    rebuilt = normalizer.rebuild_frontmatter(fields)
+
+    # Find the positions of each core field in the rebuilt output
+    lines = rebuilt.split('\n')
+    field_positions = {}
+    for i, line in enumerate(lines):
+        for field_name in ['title', 'created', 'updated', 'tags', 'aliases']:
+            if line.startswith(f'{field_name}:'):
+                field_positions[field_name] = i
+
+    # Core fields must appear in the prescribed order
+    assert 'title' in field_positions
+    assert 'created' in field_positions
+    assert 'updated' in field_positions
+    assert 'tags' in field_positions
+    assert 'aliases' in field_positions
+    assert field_positions['title'] < field_positions['created']
+    assert field_positions['created'] < field_positions['updated']
+    assert field_positions['updated'] < field_positions['tags']
+    assert field_positions['tags'] < field_positions['aliases']
+
+
+def test_field_order_unknown_fields_preserve_original_order():
+    """Unknown fields (not in the core list) must preserve their original
+    insertion order and appear after all core fields."""
+    content = """---
+status: draft
+title: Unknown Order Test
+priority: high
+created: 2024-03-15
+author: Alice
+tags:
+  - test
+reviewer: Bob
+---
+# Content
+"""
+    fields, rest = normalizer.parse_frontmatter(content)
+    rebuilt = normalizer.rebuild_frontmatter(fields)
+
+    lines = rebuilt.split('\n')
+    # Collect all field keys in order from rebuilt output
+    field_keys = []
+    for line in lines:
+        if ':' in line and not line.startswith('  ') and not line.startswith('-') and line.strip() != '---':
+            key = line.split(':')[0].strip()
+            field_keys.append(key)
+
+    # Core fields must come first: title, created, tags
+    # (updated and aliases not present)
+    assert field_keys[0] == 'title'
+    assert field_keys[1] == 'created'
+    assert field_keys[2] == 'tags'
+
+    # Unknown fields after core, in original order: status, priority, author, reviewer
+    unknown_fields = field_keys[3:]
+    # Original order: status, priority, author, reviewer
+    assert 'status' in unknown_fields
+    assert 'priority' in unknown_fields
+    assert 'author' in unknown_fields
+    assert 'reviewer' in unknown_fields
+    # Check relative order of unknowns
+    status_idx = unknown_fields.index('status')
+    priority_idx = unknown_fields.index('priority')
+    author_idx = unknown_fields.index('author')
+    reviewer_idx = unknown_fields.index('reviewer')
+    assert status_idx < priority_idx < author_idx < reviewer_idx
+
+
+def test_field_order_multiline_field_preserved_with_ordering():
+    """Multi-line fields must be preserved intact and placed correctly
+    in the field ordering alongside core fields."""
+    content = """---
+tags: [multiline-test]
+created: 2024-07-01
+title: Multi-line Order Test
+description: |
+  First line of description
+  Second line with special chars: ---
+  Third line with [[wikilink]]
+status: active
+---
+# Content
+"""
+    fields, rest = normalizer.parse_frontmatter(content)
+    rebuilt = normalizer.rebuild_frontmatter(fields)
+
+    # Multi-line content preserved
+    assert "First line of description" in rebuilt
+    assert "Second line with special chars: ---" in rebuilt
+    assert "Third line with [[wikilink]]" in rebuilt
+
+    # Check ordering: title → created → tags → description → status
+    lines = rebuilt.split('\n')
+    field_keys = []
+    for line in lines:
+        if ':' in line and not line.startswith('  ') and not line.startswith('-') and line.strip() != '---':
+            key = line.split(':')[0].strip()
+            if key not in field_keys:
+                field_keys.append(key)
+
+    assert field_keys[0] == 'title'
+    assert field_keys[1] == 'created'
+    assert field_keys[2] == 'tags'
+    assert 'description' in field_keys
+    assert 'status' in field_keys
+    # description should appear before status (original order)
+    assert field_keys.index('description') < field_keys.index('status')
+
+
+def test_field_order_updated_and_aliases_not_added():
+    """Fields 'updated' and 'aliases' must NOT be added to frontmatter
+    when they don't exist in the original document."""
+    content = """---
+title: No Extra Fields Test
+created: 2024-01-01
+tags:
+  - important
+description: Just a note
+---
+# Content
+"""
+    fields, rest = normalizer.parse_frontmatter(content)
+    rebuilt = normalizer.rebuild_frontmatter(fields)
+
+    # updated and aliases must NOT appear
+    assert 'updated:' not in rebuilt
+    assert 'aliases:' not in rebuilt
+
+    # Core fields that do exist should be present and ordered
+    assert 'title: No Extra Fields Test' in rebuilt
+    assert 'created: 2024-01-01' in rebuilt
+    assert 'tags:' in rebuilt
+
+    # Unknown field preserved
+    assert 'description: |' in rebuilt or 'description:' in rebuilt
+
+
+def test_field_order_aliases_after_tags():
+    """When both tags and aliases exist, aliases must appear after tags
+    in the rebuilt frontmatter."""
+    content = """---
+title: Aliases Order Test
+created: 2024-08-01
+aliases:
+  - alias-one
+  - alias-two
+tags:
+  - note
+  - reference
+---
+# Content
+"""
+    fields, rest = normalizer.parse_frontmatter(content)
+    rebuilt = normalizer.rebuild_frontmatter(fields)
+
+    lines = rebuilt.split('\n')
+    tags_line_idx = None
+    aliases_line_idx = None
+    for i, line in enumerate(lines):
+        if line.startswith('tags:'):
+            tags_line_idx = i
+        if line.startswith('aliases:'):
+            aliases_line_idx = i
+
+    assert tags_line_idx is not None, "tags: line not found in rebuilt"
+    assert aliases_line_idx is not None, "aliases: line not found in rebuilt"
+    assert tags_line_idx < aliases_line_idx, (
+        f"tags (line {tags_line_idx}) must appear before aliases (line {aliases_line_idx})"
+    )
+
+
+def test_field_order_full_process_preserves_order():
+    """Integration test: process_file must preserve field ordering
+    after full normalization pipeline (merge + rebuild)."""
+    import tempfile
+    import shutil
+
+    tmpdir = tempfile.mkdtemp(prefix="fo_test_")
+    try:
+        # Create a file with mixed-order fields
+        md_path = os.path.join(tmpdir, "field_order_test.md")
+        content = """---
+aliases: [test-alias]
+updated: 2025-06-01
+tags:
+  - unity
+  - csharp
+custom_field: custom_value
+created: 2023-12-01
+title: Field Order Integration
+another_custom: another_value
+---
+# Field Order Integration Test
+
+Body content here.
+"""
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        result = normalizer.process_file(md_path, dry_run=False)
+        processed = read_file(md_path)
+
+        # Check ordering in processed output
+        lines = processed.split('\n')
+        field_keys = []
+        for line in lines:
+            if ':' in line and not line.startswith('  ') and not line.startswith('-') and line.strip() != '---':
+                key = line.split(':')[0].strip()
+                if key not in field_keys:
+                    field_keys.append(key)
+
+        # Core fields in order: title, created, updated, tags, aliases
+        assert 'title' in field_keys
+        assert 'created' in field_keys
+        assert 'updated' in field_keys
+        assert 'tags' in field_keys
+        assert 'aliases' in field_keys
+
+        title_idx = field_keys.index('title')
+        created_idx = field_keys.index('created')
+        updated_idx = field_keys.index('updated')
+        tags_idx = field_keys.index('tags')
+        aliases_idx = field_keys.index('aliases')
+
+        assert title_idx < created_idx < updated_idx < tags_idx < aliases_idx
+
+        # Unknown fields after core, in original order
+        assert 'custom_field' in field_keys
+        assert 'another_custom' in field_keys
+        custom_idx = field_keys.index('custom_field')
+        another_idx = field_keys.index('another_custom')
+        assert custom_idx < another_idx
+        assert aliases_idx < custom_idx  # unknowns after core
+
+        # Default tags merged
+        assert 'learning' in processed
+        assert 'ai' in processed
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)

@@ -247,14 +247,14 @@ def rebuild_frontmatter(fields):
     """
     lines = ['---']
 
-    # Define preferred order
-    priority_keys = ['title', 'created', 'tags']
+    # Define preferred order: core fields first, then unknown fields in original order
+    priority_keys = ['title', 'created', 'updated', 'tags', 'aliases']
     ordered_keys = []
     for k in priority_keys:
         if k in fields:
             ordered_keys.append(k)
-    # Remaining keys sorted alphabetically
-    remaining = sorted([k for k in fields if k not in priority_keys])
+    # Remaining keys preserve original insertion order (Python 3.7+ dicts are ordered)
+    remaining = [k for k in fields if k not in priority_keys]
     ordered_keys.extend(remaining)
 
     for key in ordered_keys:
