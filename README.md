@@ -1,3 +1,5 @@
+> **状态：已归档（2026-10-20）**。这是 hermes-harness 工作线的 Python 验证场，后续工作见 [aeh](https://github.com/YIMO691/aeh)。
+
 # Obsidian Note Normalizer
 
 > Obsidian Markdown 笔记规范化工具。hermes-harness 工作线的 Python 验证场。
